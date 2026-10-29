@@ -1,13 +1,20 @@
+# Secrets
 .env
 .env.*
 !.env.example
+
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+
+# Backups
 *.backup
 *_backup.py
 index.before-*.html
+app.py.before-render
+
+# Private notes and temporary tests
 notes.json
 test_*.py
-.venv/
-venv/
-app.py.before-render
