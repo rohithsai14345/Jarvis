@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+*.backup
+*_backup.py
+index.before-*.html
+notes.json
+test_*.py
+.venv/
+venv/
+app.py.before-render
