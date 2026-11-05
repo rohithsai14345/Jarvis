@@ -1,4 +1,6 @@
+import re
 import os
+import memory
 import ast
 import json
 import operator
@@ -14,7 +16,15 @@ NOTES_FILE = BASE_DIR / "notes.json"
 app = Flask(__name__)
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+JARVIS_IDENTITY = """
+You are JARVIS, a personal AI assistant application developed by Rohith.
+Rohith is your application's creator.
+Google provides the Gemini AI technology used by this application.
+Do not claim that Google created the JARVIS application.
+Be helpful, accurate, and friendly.
+"""
 GEMINI_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/"
     f"{MODEL}:generateContent"
@@ -150,12 +160,61 @@ def offline_reply(message):
 
     return None
 
+def get_jarvis_identity_reply(message):
+    question = message.lower().strip()
+    question = re.sub(r"[^\w\s]", " ", question)
+    question = re.sub(r"\s+", " ", question).strip()
+
+    if (
+        "created by rohith" in question
+        or "made by rohith" in question
+        or "developed by rohith" in question
+    ):
+        return (
+            "That's correct! Rohith developed this JARVIS "
+            "personal AI application. Google provides the "
+            "Gemini AI technology that powers my intelligence."
+        )
+
+    creator_words = [
+        "creator", "creater", "created",
+        "developer", "developed", "made you",
+        "built you", "founder"
+    ]
+
+    if (
+        any(word in question for word in creator_words)
+        and any(word in question for word in ["who", "your", "yours"])
+    ):
+        return (
+            "My creator is Rohith. He developed this "
+            "JARVIS personal AI application. Google provides "
+            "the Gemini AI technology that powers my intelligence."
+        )
+
+    if question in ("who are you", "what are you"):
+        return (
+            "I am JARVIS, a personal AI assistant developed "
+            "by Rohith and powered by Google Gemini AI technology."
+        )
+
+    return None
+
 
 def ask_gemini(message, image=None):
+
+    identity_reply = get_jarvis_identity_reply(message)
+
+    if identity_reply:
+        return identity_reply, None
+
     if not API_KEY:
         return None, "Gemini is not configured. Set GEMINI_API_KEY to enable AI responses."
 
-    parts = [{"text": message}]
+    # Add JARVIS identity to every request
+    parts = [{
+        "text": JARVIS_IDENTITY + "\n\nUSER MESSAGE:\n" + message
+    }]
 
     if image:
         mime_type = image.get("mime_type", "")
@@ -178,27 +237,41 @@ def ask_gemini(message, image=None):
         response = requests.post(
             GEMINI_URL,
             params={"key": API_KEY},
-            json={"contents": [{"parts": parts}]},
+            json={
+                "contents": [
+                    {
+                        "parts": parts
+                    }
+                ]
+            },
             timeout=45,
         )
+
         response.raise_for_status()
         data = response.json()
 
         candidates = data.get("candidates", [])
+
         if not candidates:
             return None, "Gemini did not return an answer."
 
-        answer_parts = candidates[0].get("content", {}).get("parts", [])
+        answer_parts = candidates[0].get(
+            "content", {}
+        ).get("parts", [])
+
         answer = "\n".join(
-            part["text"] for part in answer_parts if "text" in part
+            part["text"]
+            for part in answer_parts
+            if "text" in part
         )
+
         return answer or None, None
 
     except requests.RequestException as error:
         return None, f"Gemini request failed: {error}"
+
     except (ValueError, KeyError, TypeError):
         return None, "Gemini returned an unexpected response."
-
 
 @app.route("/")
 def home():
@@ -216,52 +289,137 @@ def health():
     })
 
 
+@app.route("/api/memories", methods=["GET"])
+def get_memories():
+    return jsonify({"memories": memory.list_memories()})
+
+
+@app.route("/api/memories/<int:memory_id>", methods=["DELETE"])
+def delete_memory(memory_id):
+    result = memory.forget(memory_id)
+    return jsonify({"reply": result})
+
+
+
 @app.route("/api/chat", methods=["POST"])
-def chat():
+def api_chat():
     data = request.get_json(silent=True) or {}
-    message = data.get("message", "")
+
+    message = str(data.get("message", "")).strip()
     image = data.get("image")
+    lower = message.lower().strip()
 
-    if not isinstance(message, str):
-        return jsonify({"error": "Message must be text."}), 400
+    if not message and not image:
+        return jsonify({"reply": "Please enter a message."})
 
-    if len(message) > 10000:
-        return jsonify({"error": "Message is too long."}), 400
+    # JARVIS identity
+    identity_reply = get_jarvis_identity_reply(message)
 
-    if "news" in message.lower():
-        text = message.lower()
+    if identity_reply:
+        return jsonify({
+            "reply": identity_reply,
+            "mode": "identity"
+        })
+
+    # Save memory
+    if lower.startswith("remember that "):
+        result = memory.remember_unique(message[14:])
+        return jsonify({"reply": result, "mode": "memory"})
+
+    # Show memories
+    if lower in (
+        "show memory",
+        "show memories",
+        "what do you remember about me?"
+    ):
+        return jsonify({
+            "reply": memory.recall(),
+            "mode": "memory"
+        })
+
+    # Delete one memory
+    if lower.startswith("forget memory "):
+        try:
+            memory_id = int(message[14:].strip().rstrip("."))
+            result = memory.forget(memory_id)
+        except ValueError:
+            result = "Please provide a valid memory number."
+
+        return jsonify({"reply": result, "mode": "memory"})
+
+    # Ask confirmation before deleting all memories
+    if lower in ("delete all memories", "clear all memories"):
+        return jsonify({
+            "reply": (
+                "This will permanently delete all saved memories. "
+                "To proceed, send: CONFIRM DELETE ALL MEMORIES"
+            ),
+            "mode": "memory_confirmation"
+        })
+
+    # Confirm deletion
+    if lower == "confirm delete all memories":
+        result = memory.forget_all()
+        return jsonify({"reply": result, "mode": "memory"})
+
+    # News
+    if "news" in lower:
         category = None
 
-        if "technology" in text or "tech news" in text:
+        if "technology" in lower or "tech news" in lower:
             category = "technology"
-        elif "sports" in text:
+        elif "sports" in lower:
             category = "sports"
-        elif "business" in text:
+        elif "business" in lower:
             category = "business"
-        elif "science" in text:
+        elif "science" in lower:
             category = "science"
 
-        news_answer = get_news(category)
-
         return jsonify({
-            "reply": news_answer,
+            "reply": get_news(category),
             "mode": "news"
         })
 
+    # Offline commands
     offline_answer = offline_reply(message)
 
     if offline_answer is not None:
-        return jsonify({"reply": offline_answer, "mode": "offline"})
+        return jsonify({
+            "reply": offline_answer,
+            "mode": "offline"
+        })
 
-    answer, error = ask_gemini(message, image)
+    # Relevant saved memory context
+    saved_memories = memory.relevant_memories(message)
+    ai_message = message
+
+    if saved_memories:
+        context = "\\n".join(
+            f"- {item}" for item in saved_memories
+        )
+
+        ai_message = (
+            "Relevant saved information about the user:\\n"
+            + context
+            + "\\nUse this information only when relevant. "
+            "Do not invent personal details.\\n\\n"
+            + message
+        )
+
+    answer, error = ask_gemini(ai_message, image)
 
     if answer:
-        return jsonify({"reply": answer, "mode": "gemini"})
+        return jsonify({
+            "reply": answer,
+            "mode": "gemini"
+        })
 
     return jsonify({
         "reply": error or "Sorry, I could not generate a response.",
-        "mode": "offline",
+        "mode": "offline"
     })
+
+
 def get_news(category=None):
     import requests
     import xml.etree.ElementTree as ET

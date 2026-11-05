@@ -18,3 +18,9 @@ app.py.before-render
 # Private notes and temporary tests
 notes.json
 test_*.py
+
+# Private JARVIS data
+jarvis_memory.db
+*.db
+.env
+__pycache__/
