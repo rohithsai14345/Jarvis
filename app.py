@@ -420,26 +420,31 @@ def api_chat():
     })
 
 
+
 def get_news(category=None):
     import requests
     import xml.etree.ElementTree as ET
     from urllib.parse import quote
 
+    # Search specifically for India-related news.
     if category:
-        query = f"{category} news India"
-        url = (
-            "https://news.google.com/rss/search?q="
-            + quote(query)
-            + "&hl=en-IN&gl=IN&ceid=IN:en"
-        )
+        query = f"India {category} news when:1d"
+        heading = f"Latest India {category.title()} News:"
     else:
-        url = "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en"
+        query = "India news when:1d"
+        heading = "Latest India News:"
+
+    url = (
+        "https://news.google.com/rss/search?q="
+        + quote(query)
+        + "&hl=en-IN&gl=IN&ceid=IN:en"
+    )
 
     try:
         response = requests.get(
             url,
             headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15,
+            timeout=20,
         )
         response.raise_for_status()
 
@@ -447,27 +452,49 @@ def get_news(category=None):
         articles = root.findall("./channel/item")
 
         if not articles:
-            return "No news articles found. Please try again later."
+            return "No India news articles found. Please try again later."
 
-        results = ["Latest India News:"]
+        results = [heading]
+        count = 0
 
-        for i, article in enumerate(articles[:5], start=1):
+        for article in articles:
             title = article.findtext("title", "Untitled")
             link = article.findtext("link", "")
-            source = article.findtext("source", "Google News")
+            source_element = article.find("source")
+
+            source = (
+                source_element.text
+                if source_element is not None
+                else "Google News"
+            )
+
+            if not title or not link:
+                continue
+
+            count += 1
 
             results.append(
-                f"{i}. {title}\n"
+                f"{count}. {title}\n"
                 f"Source: {source}\n"
                 f"Link: {link}"
             )
 
+            if count >= 5:
+                break
+
+        if count == 0:
+            return "No India news articles found."
+
         return "\n\n".join(results)
 
-    except requests.RequestException:
+    except requests.RequestException as error:
+        print("Google News connection error:", error)
         return "Unable to connect to Google News. Check your internet."
-    except ET.ParseError:
+
+    except ET.ParseError as error:
+        print("Google News parsing error:", error)
         return "Unable to read the news feed. Please try again later."
+
 
 @app.errorhandler(413)
 def request_too_large(error):
